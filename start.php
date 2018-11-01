@@ -9,8 +9,13 @@ use Facebook\WebDriver\WebDriverBy;
 use Facebook\WebDriver\Exception\NoSuchElementException;
 use Facebook\WebDriver\Exception\TimeOutException;
 use Facebook\WebDriver\Exception\UnknownServerException;
+use Facebook\WebDriver\Exception\WebDriverCurlException;
 
 define('TIME_START', time());
+if (DEBUG) echo "Start at " . date('Y-m-d H:i:s', TIME_START) . "\n";
+register_shutdown_function(function() {
+    if (DEBUG) echo "\nFinished at " . date('Y-m-d H:i:s');
+});
 $CSV = explode("\n", file_get_contents("weblist.csv"));
 foreach ($CSV as &$string) {
     $string = explode(';', $string);
@@ -36,20 +41,25 @@ $Options->addArguments([
 ]);
 $Capabilities = DesiredCapabilities::chrome();
 $Capabilities->setCapability(ChromeOptions::CAPABILITY, $Options);
+$Browser = RemoteWebDriver::create(HOST, $Capabilities, 5000, 5000);
+$itemsProcessed = 0;
+$itemsPassedAtStart = 0;
 
 foreach ($CSV as $id => $string) {
     if ($string[0] === 'URL' || $string[0] === '') continue;
     if (isset($string[1]) && $string[1] != '') continue;
-    if ($id > 5) {
-        $timePerOne = (time() - TIME_START) / ($id - 1);
-        $elapsed = TIME_START + $timePerOne * (count($CSV) - 2);
+    if (isset($string[2]) && $string[2] != '' && $string[2] !== 'Timeout') continue;
+    if ($itemsProcessed == 0) $itemsPassedAtStart = $id;
+    $itemsProcessed++;
+    if ($itemsProcessed > 5) {
+        $timePerOne = (time() - TIME_START) / $itemsProcessed;
+        $elapsed = TIME_START + $timePerOne * (count($CSV) - $itemsPassedAtStart);
         $elapsed = ". End prognosis: " . date("d H:i:s", $elapsed);
     }
     else $elapsed = '';
     if (DEBUG) echo (implode(' ', $string))."$elapsed\n";
     $CSV[$id][1] = '';
     unset($string[2]);
-    $Browser = RemoteWebDriver::create(HOST, $Capabilities);
     try {
         if (preg_match('/^http/', $string[0]) == 0) $string[0] = 'http://' . $string[0];
         $Browser->get($string[0]);
@@ -101,14 +111,17 @@ foreach ($CSV as $id => $string) {
         $CSV[$id][1] = $cookie;
         if (DEBUG) echo ("FOUND COOKIE $cookie\n");
     } catch (NoSuchElementException $e) {
-        if (DEBUG) echo 'Element not found: ' . $e->getMessage()."\n";
+        $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
+        if (DEBUG) echo 'Element not found: ' . $msg."\n";
         $CSV[$id][2] = 'Element not found';
     } catch (TimeOutException $e) {
-        if (DEBUG) echo 'Timeout: ' . $e->getMessage()."\n";
+        $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
+        if (DEBUG) echo 'Timeout: ' . $msg."\n";
         $CSV[$id][2] = 'Timeout';
     } catch (Exception $e) {
-        if (DEBUG) echo $e->getMessage()."\n";
-        $CSV[$id][2] = $e->getMessage();
+        $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
+        if (DEBUG) echo $msg."\n";
+        $CSV[$id][2] = preg_replace('/\n[\w\W]+/', '', $msg);
     } finally {
         `rm weblist.csv`;
         file_put_contents(
@@ -121,7 +134,16 @@ foreach ($CSV as $id => $string) {
                 )
             )
         );
-        foreach ($Browser->getWindowHandles() as $handle) $Browser->switchTo()->window($handle)->close();
+        try {
+            $handles = $Browser->getWindowHandles();
+            for ($i = 1; $i < count($handles); $i++) {
+                $Browser->switchTo()->window($handles[$i])->close();
+            }
+            $Browser->switchTo()->window($handles[0]);
+        }
+        catch (WebDriverCurlException $e) {
+            echo "Curl error when tried to get windows handles: " . $e->getMessage()."\n";
+        }
     }
 }
 $Browser->quit();
