@@ -14,7 +14,7 @@ use Facebook\WebDriver\Exception\WebDriverCurlException;
 define('TIME_START', time());
 if (DEBUG) echo "Start at " . date('Y-m-d H:i:s', TIME_START) . "\n";
 register_shutdown_function(function() {
-    if (DEBUG) echo "\nFinished at " . date('Y-m-d H:i:s');
+    if (DEBUG) echo "\nFinished at " . date('Y-m-d H:i:s')."\n";
 });
 $CSV = explode("\n", file_get_contents("weblist.csv"));
 foreach ($CSV as &$string) {
@@ -37,90 +37,120 @@ $Options->addArguments([
     '--disable-default-apps',
     '--disable-extensions',
     '--disable-translate',
-    '--window-size=1366,768'
+    '--window-size=800,600',
+    '--no-proxy-server'
 ]);
 $Capabilities = DesiredCapabilities::chrome();
 $Capabilities->setCapability(ChromeOptions::CAPABILITY, $Options);
-$Browser = RemoteWebDriver::create(HOST, $Capabilities, 5000, 5000);
 $itemsProcessed = 0;
 $itemsPassedAtStart = 0;
 
 foreach ($CSV as $id => $string) {
     if ($string[0] === 'URL' || $string[0] === '') continue;
-    if (isset($string[1]) && $string[1] != '') continue;
-    if (isset($string[2]) && $string[2] != '' && $string[2] !== 'Timeout') continue;
+    //if (isset($string[1]) && $string[1] != '') continue;
+    //if (isset($string[2]) && $string[2] != '') continue;
+    if ($string[0] != 'https://comidasparavegetarianos.com/') continue;
     if ($itemsProcessed == 0) $itemsPassedAtStart = $id;
+    $Browser = RemoteWebDriver::create(HOST, $Capabilities, 30000, 30000);
     $itemsProcessed++;
     if ($itemsProcessed > 5) {
         $timePerOne = (time() - TIME_START) / $itemsProcessed;
         $elapsed = TIME_START + $timePerOne * (count($CSV) - $itemsPassedAtStart);
         $elapsed = ". End prognosis: " . date("d H:i:s", $elapsed);
-    }
-    else $elapsed = '';
-    if (DEBUG) echo (implode(' ', $string))."$elapsed\n";
+    } else $elapsed = '';
+    if (DEBUG) echo (implode(' ', $string)) . "$elapsed\n";
     $CSV[$id][1] = '';
     unset($string[2]);
     try {
         if (preg_match('/^http/', $string[0]) == 0) $string[0] = 'http://' . $string[0];
         $Browser->get($string[0]);
         $Browser->manage()->timeouts()->implicitlyWait(rand(20, 50) / 10);
-        $adw = $Browser->findElement(WebDriverBy::cssSelector('div.mcimg'));
-        $coord = $adw->getCoordinates();
-        $Y = $coord->onPage()->getY();
-        $Browser->executeScript("window.scroll(0, $Y)");
+        $adw = null;
+        $time = time();
+        while (true) {
+            try {
+                if (DEBUG) echo "searching ";
+                $adw = $Browser->findElement(WebDriverBy::cssSelector('.mcimg a'));
+                if (DEBUG) echo "found\n";
+                break;
+            } catch (NoSuchElementException $e) {
+                if (time() - $time > 5) {
+                    print_r($Browser->manage()->getLog('browser'));
+                    throw $e;
+                    
+                }
+                else usleep(0.25 * 1000000);
+                continue;
+            }
+        };
+        
+        $coord = null;
+        $Browser->wait(10)->until(function () use ($adw, $Browser) {
+            try {
+                $coord = $adw->getCoordinates();
+                $Y = $coord->onPage()->getY();
+                $Browser->executeScript("window.scroll(0, $Y)");
+                if (DEBUG) echo "Attached\n";
+                return true;
+            } catch (\Facebook\WebDriver\Exception\StaleElementReferenceException $e) {
+                if (DEBUG) echo "not_attached ";
+                return false;
+            }
+        });
         $currentTab = $Browser->getWindowHandle();
         $Browser->wait(5)->until(function () use ($Browser, $adw, $coord) {
             $Browser->manage()->timeouts()->implicitlyWait(rand(10, 20) / 10);
-            $Browser->getMouse()->mouseMove($coord, rand(10, 15), rand(10, 15));
+            if ($coord != null) $Browser->getMouse()->mouseMove($coord, rand(10, 15), rand(10, 15));
             //$a = $adw->findElement(WebDriverBy::cssSelector('a'));
             try {
                 $adw->click(); //this makes href right
             } catch (UnknownServerException $e) {
                 $msg = $e->getMessage();
-                if (DEBUG) echo "Not clickable\n";
                 if (strpos($msg, 'is not clickable') !== false) {
+                    if (DEBUG) echo "Not clickable\n";
                     preg_match('/would receive the click: (.+)/', $msg, $arr);
                     if (count($arr) !== 2) throw $e;
                     $elemStr = $arr[1];
                     preg_match_all('/([-_\w\d]+)="([^"]+)"/', $elemStr, $arr);
                     $selectors = [];
                     for ($i = 0; $i < count($arr[1]); $i++) {
-                        if     ($arr[1][$i] == 'id')    $selectors[] = '#' . $arr[2][$i];
-                        elseif ($arr[1][$i] == 'class') $selectors[] = '.' . str_replace(' ', '.', $arr[2][$i]);
+                        if ($arr[1][$i] == 'id') $selectors[] = '#' . trim($arr[2][$i]);
+                        elseif ($arr[1][$i] == 'class') $selectors[] = '.' . preg_replace('/\s+/', '.', $arr[2][$i]);
                         elseif ($arr[1][$i] == 'style') continue;
-                        else   $selectors[] = '[' . $arr[1][$i] . '=" ' . $arr[2][$i] . '"]';
+                        else   $selectors[] = '[' . $arr[1][$i] . '="' . trim($arr[2][$i]) . '"]';
                     }
                     $selectors = implode('', $selectors);
                     if (DEBUG) echo "trying to remove Element $selectors\n";
                     $Browser->executeScript("document.querySelector('$selectors').remove()");
                     return false;
-                }
-                else throw $e;
+                } else throw $e;
             }
             $handles = $Browser->getWindowHandles();
             return count($handles) > 1;
         });
         $Browser->switchTo()->window($currentTab);
-        $Browser->get('https://www.mgid.com');
-        $Browser->wait(5)->until(
+        $Browser->get('https://www.marketgid.com'); //faster than load main page
+        echo date('i:s')."\n";
+        $Browser->wait(10)->until(
             function () use ($Browser) {
+                if (DEBUG) echo "waiting cookie " . date('i:s')." ";
                 return $Browser->manage()->getCookieNamed('mtuid') !== null;
             }
         );
         $cookie = $Browser->manage()->getCookieNamed('mtuid')->getValue();
         $CSV[$id][1] = $cookie;
-        if (DEBUG) echo ("FOUND COOKIE $cookie\n");
+        if (DEBUG) echo("FOUND COOKIE $cookie\n");
     } catch (NoSuchElementException $e) {
         $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
         if (DEBUG) echo 'Element not found: ' . $msg."\n";
-        $CSV[$id][2] = 'Element not found';
+            $CSV[$id][2] = 'Element not found';
     } catch (TimeOutException $e) {
         $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
-        if (DEBUG) echo 'Timeout: ' . $msg."\n";
+        if (DEBUG) echo 'Timeout: ' . $msg . "\n";
         $CSV[$id][2] = 'Timeout';
     } catch (Exception $e) {
         $msg = preg_replace('/\n[\w\W]+/', '', $e->getMessage());
-        if (DEBUG) echo $msg."\n";
+        if (DEBUG) echo $e . "\n";
         $CSV[$id][2] = preg_replace('/\n[\w\W]+/', '', $msg);
     } finally {
         `rm weblist.csv`;
@@ -129,21 +159,22 @@ foreach ($CSV as $id => $string) {
             implode(
                 "\n",
                 array_map(
-                    function ($v) {return implode(';', $v);},
+                    function ($v) {
+                        return implode(';', $v);
+                    },
                     $CSV
                 )
             )
         );
-        try {
+        /*try {
             $handles = $Browser->getWindowHandles();
             for ($i = 1; $i < count($handles); $i++) {
                 $Browser->switchTo()->window($handles[$i])->close();
             }
             $Browser->switchTo()->window($handles[0]);
-        }
-        catch (WebDriverCurlException $e) {
-            echo "Curl error when tried to get windows handles: " . $e->getMessage()."\n";
-        }
+        } catch (WebDriverCurlException $e) {
+            echo "Curl error when tried to get windows handles: " . $e->getMessage() . "\n";
+        }*/
+        $Browser->quit();
     }
 }
-$Browser->quit();
